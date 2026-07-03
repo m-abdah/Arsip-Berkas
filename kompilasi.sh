@@ -238,9 +238,9 @@ show_help() {
     echo "  help      Show this help"
     echo ""
     echo "Examples:"
-    echo "  ./compile.sh              # Standard build"
-    echo "  ./compile.sh release      # Release build"
-    echo "  ./compile.sh debug        # Debug build"
+    echo "  ./kompilasi.sh              # Standard build"
+    echo "  ./kompilasi.sh release      # Release build"
+    echo "  ./kompilasi.sh debug        # Debug build"
 }
 
 # Main
