@@ -270,10 +270,10 @@ echo   clean     Remove build artifacts
 echo   help      Show this help
 echo.
 echo Examples:
-echo   compile.bat              Standard build
-echo   compile.bat release      Release build
-echo   compile.bat debug        Debug build
-echo   compile.bat test         Build and test
+echo   kompilasi.bat              Standard build
+echo   kompilasi.bat release      Release build
+echo   kompilasi.bat debug        Debug build
+echo   kompilasi.bat test         Build and test
 echo.
 echo Requirements:
 echo   - GCC (MinGW-w64, MSYS2, or TDM-GCC)
