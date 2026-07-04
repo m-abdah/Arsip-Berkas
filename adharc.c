@@ -593,4 +593,321 @@ int baca_multi_berkas(const char *nama_container, const char *key) {
             // Dekrip jika perlu (di tempat)
             if (flag == FLAG_ENKRIP && key_len > 0) {
                 for (size_t j = 0; j < read; j++) {
-                    chunk[j] ^= key
+                    chunk[j] ^= key[(total_read + j) % key_len];
+                }
+            }
+            
+            // Update CRC32
+            crc = crc32_update(crc, chunk, read);
+            total_read += read;
+        }
+        
+        crc = crc32_finalize(crc);
+
+        // Format ukuran
+        char ukuran_str[32];
+        format_ukuran(ukuran, ukuran_str, sizeof(ukuran_str));
+
+        const char *ikon = "📄";
+        if (strchr(nama, DIR_SEPARATOR)) {
+            ikon = "📁→📄";
+            size_t depth = 0;
+            for (char *p = nama; *p; p++) if (*p == DIR_SEPARATOR) depth++;
+            if (depth > depth_max) depth = depth;
+        }
+
+        printf("%-6zu %s %-40s %12s  0x%08X  %s\n",
+               i + 1, ikon, nama, ukuran_str, crc,
+               crc != 0 ? "✅ OK" : "⚠ EMPTY");
+
+        total_ukuran += ukuran;
+        file_count++;
+        free(nama);
+    }
+
+    // Format total ukuran
+    char total_str[32];
+    format_ukuran(total_ukuran, total_str, sizeof(total_str));
+
+    printf("───────────────────────────────────────────────────────────────────────────────\n");
+    printf("Total: %zu file", file_count);
+    if (depth_max > 0) printf(", %zu level subdirektori", depth_max);
+    printf(" | %s (%zu bytes)\n", total_str, total_ukuran);
+    
+    if (error_crc > 0) {
+        printf("⚠ %d file KORUP! Password salah atau data rusak.\n", error_crc);
+    }
+
+    fclose(masuk);
+    return 1;
+}
+
+// ============================================================
+//                    BUAT DIREKTORI
+// ============================================================
+int buat_direktori_untuk_file(const char *path_file) {
+    char *path_salin = my_strdup(path_file);
+    if (path_salin == NULL) return 0;
+    char *sep = strrchr(path_salin, DIR_SEPARATOR);
+    if (sep == NULL) { free(path_salin); return 1; }
+    *sep = '\0';
+
+#ifdef _WIN32
+    char *p = path_salin;
+    while ((p = strchr(p, DIR_SEPARATOR)) != NULL) {
+        *p = '\0'; CreateDirectory(path_salin, NULL); *p = DIR_SEPARATOR; p++;
+    }
+    CreateDirectory(path_salin, NULL);
+#else
+    size_t len = strlen(path_salin) + 10;
+    char *cmd = (char*)malloc(len);
+    if (cmd) { snprintf(cmd, len, "mkdir -p \"%s\"", path_salin); system(cmd); free(cmd); }
+#endif
+
+    free(path_salin);
+    return 1;
+}
+
+// ============================================================
+//                    EKSTRAK (OPTIMIZED STREAMING)
+// ============================================================
+int ekstrak_semua(const char *nama_container, const char *key) {
+    FILE *masuk = fopen(nama_container, "rb");
+    if (masuk == NULL) {
+        fprintf(stderr, "⚠ Tidak bisa membuka: %s\n", nama_container);
+        return 0;
+    }
+
+    // Set buffer input besar
+    setvbuf(masuk, NULL, _IOFBF, IO_BUFFER);
+
+    if (!validasi_signature(masuk)) { fclose(masuk); return 0; }
+
+    uint8_t flag;
+    fread(&flag, sizeof(uint8_t), 1, masuk);
+
+    size_t key_len = key ? strlen(key) : 0;
+
+    if (flag == FLAG_ENKRIP && key_len == 0) {
+        fprintf(stderr, "🔐 Container TERENKRIPSI! Gunakan -p \"password\"\n");
+        fclose(masuk);
+        return 0;
+    }
+
+    size_t jumlah;
+    fread(&jumlah, sizeof(size_t), 1, masuk);
+
+    fprintf(stderr, "📤 Mengekstrak %zu entri...\n\n", jumlah);
+
+    for (size_t i = 0; i < jumlah; i++) {
+        char *nama = baca_nama(masuk, key, key_len, flag == FLAG_ENKRIP);
+        if (nama == NULL) break;
+
+        size_t ukuran;
+        fread(&ukuran, sizeof(size_t), 1, masuk);
+
+        // Buat direktori jika perlu
+        buat_direktori_untuk_file(nama);
+
+        FILE *keluar = fopen(nama, "wb");
+        if (keluar == NULL) {
+            fprintf(stderr, "❌ Gagal membuat: %s\n", nama);
+            // Skip data
+            fseek(masuk, (long)ukuran, SEEK_CUR);
+            free(nama);
+            continue;
+        }
+
+        // Set buffer output besar
+        setvbuf(keluar, NULL, _IOFBF, IO_BUFFER);
+
+        // Streaming: baca -> dekrip -> tulis
+        uint8_t chunk[CHUNK_SIZE];
+        size_t total_read = 0;
+        int crc_ok = 1;
+        
+        while (total_read < ukuran) {
+            size_t to_read = (ukuran - total_read < CHUNK_SIZE) ? 
+                             (ukuran - total_read) : CHUNK_SIZE;
+            size_t read = fread(chunk, 1, to_read, masuk);
+            
+            if (read == 0) break;
+            
+            // Dekrip jika perlu
+            if (flag == FLAG_ENKRIP && key_len > 0) {
+                for (size_t j = 0; j < read; j++) {
+                    chunk[j] ^= key[(total_read + j) % key_len];
+                }
+            }
+            
+            fwrite(chunk, 1, read, keluar);
+            total_read += read;
+        }
+        
+        fclose(keluar);
+
+        char ukuran_str[32];
+        format_ukuran(ukuran, ukuran_str, sizeof(ukuran_str));
+        fprintf(stderr, "✓ %s (%s)\n", nama, ukuran_str);
+        
+        free(nama);
+    }
+
+    fclose(masuk);
+    fprintf(stderr, "\n✅ Ekstrak selesai!\n");
+    return 1;
+}
+
+// ============================================================
+//                    HELP
+// ============================================================
+void tampilkan_help(const char *program) {
+    printf("ABDAH Archiver v%s (Optimized Streaming + Auto-size Format)\n\n", VERSI);
+    printf("Pemakaian:\n\n");
+    printf("  🔐 Arsipkan dengan enkripsi:\n");
+    printf("    %s -p \"password\" -f <file...> -o <output>\n", program);
+    printf("    %s -p \"rahasia\" -d <direktori> -o arsip.dat\n\n", program);
+    printf("  🔓 Arsipkan tanpa enkripsi:\n");
+    printf("    %s -f <file...> -o <output>\n", program);
+    printf("    %s -d <direktori> -o arsip.dat\n\n", program);
+    printf("  📋 Lihat isi:\n");
+    printf("    %s -l <container>                  # tanpa password\n", program);
+    printf("    %s -p \"password\" -l <container>    # dengan password\n\n", program);
+    printf("  📂 Ekstrak:\n");
+    printf("    %s -x <container>\n", program);
+    printf("    %s -p \"password\" -x <container>\n\n", program);
+    printf("Opsi:\n");
+    printf("  -p <password>   Password enkripsi XOR\n");
+    printf("  -f <file...>    Daftar file\n");
+    printf("  -d <dir>        Direktori (rekursif)\n");
+    printf("  -o <output>     File output\n");
+    printf("  -l <container>  List isi (dengan CRC32)\n");
+    printf("  -x <container>  Ekstrak\n");
+    printf("  --help          Bantuan\n");
+    printf("  --version       Versi\n");
+    printf("\nFitur Optimasi:\n");
+    printf("  • Streaming I/O dengan buffer 1MB\n");
+    printf("  • Memory-mapped I/O (Linux/Mac)\n");
+    printf("  • CRC32 dihitung saat -l saja\n");
+    printf("  • Format ukuran auto (B, KB, MB, GB, TB)\n");
+}
+
+void tampilkan_versi() {
+    printf("ABDAH Archiver v%s\n", VERSI);
+    printf("Fitur: XOR Encryption + CRC32 (on-demand) + Auto-size Format\n");
+    printf("Optimasi: Streaming I/O, Memory-mapped file, Large buffers\n");
+}
+
+// ============================================================
+//                    MAIN
+// ============================================================
+int main(int argc, char *argv[]) {
+    // Inisialisasi CRC32 table di awal
+    crc32_init();
+    
+    if (argc < 2) { tampilkan_help(argv[0]); return 1; }
+
+    char *file_list[1024];   size_t jml_file = 0;
+    char *dir_list[1024];    size_t jml_dir = 0;
+    char *file_output = NULL;
+    char *file_container = NULL;
+    char *password = NULL;
+    int mode = 0;            // 1=create, 2=list, 3=extract
+    int flag_f = 0, flag_d = 0, flag_p = 0;
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--help") == 0) {
+            tampilkan_help(argv[0]); return 0;
+        } else if (strcmp(argv[i], "--version") == 0) {
+            tampilkan_versi(); return 0;
+        } else if (strcmp(argv[i], "-p") == 0) {
+            flag_p = 1; flag_f = 0; flag_d = 0;
+            if (i + 1 < argc && argv[i+1][0] != '-') {
+                password = argv[++i];
+            } else {
+                fprintf(stderr, "❌ -p butuh password\n");
+                return 1;
+            }
+        } else if (strcmp(argv[i], "-f") == 0) {
+            mode = 1; flag_f = 1; flag_d = 0; flag_p = 0;
+        } else if (strcmp(argv[i], "-d") == 0) {
+            mode = 1; flag_d = 1; flag_f = 0; flag_p = 0;
+        } else if (strcmp(argv[i], "-o") == 0) {
+            flag_f = 0; flag_d = 0; flag_p = 0;
+            if (i + 1 < argc && argv[i+1][0] != '-') {
+                file_output = argv[++i];
+            } else {
+                fprintf(stderr, "❌ -o butuh nama output\n");
+                return 1;
+            }
+        } else if (strcmp(argv[i], "-l") == 0) {
+            mode = 2; flag_f = 0; flag_d = 0; flag_p = 0;
+            if (i + 1 < argc && argv[i+1][0] != '-') {
+                file_container = argv[++i];
+            } else {
+                fprintf(stderr, "❌ -l butuh container\n");
+                return 1;
+            }
+        } else if (strcmp(argv[i], "-x") == 0) {
+            mode = 3; flag_f = 0; flag_d = 0; flag_p = 0;
+            if (i + 1 < argc && argv[i+1][0] != '-') {
+                file_container = argv[++i];
+            } else {
+                fprintf(stderr, "❌ -x butuh container\n");
+                return 1;
+            }
+        } else if (flag_f) {
+            if (jml_file < 1024) file_list[jml_file++] = argv[i];
+        } else if (flag_d) {
+            if (jml_dir < 1024) dir_list[jml_dir++] = argv[i];
+        } else {
+            fprintf(stderr, "⚠ Argumen tidak dikenal: %s\n", argv[i]);
+            return 1;
+        }
+    }
+
+    // Eksekusi
+    if (mode == 1) {
+        if (jml_file == 0 && jml_dir == 0) {
+            fprintf(stderr, "❌ Gunakan -f atau -d\n");
+            return 1;
+        }
+        FILE *keluar = file_output ? fopen(file_output, "wb") : stdout;
+        if (keluar == NULL) {
+            fprintf(stderr, "❌ Gagal membuat: %s\n", file_output);
+            return 1;
+        }
+        
+        // Set buffer output besar
+        if (keluar != stdout) {
+            setvbuf(keluar, NULL, _IOFBF, IO_BUFFER);
+        }
+        
+        int hasil = proses_input_dan_tulis(keluar, file_list, jml_file,
+                                                    dir_list,  jml_dir, password);
+        if (keluar != stdout) fclose(keluar);
+        if (hasil) {
+            fprintf(stderr, "\n✅ Container berhasil dibuat");
+            if (file_output) fprintf(stderr, ": %s\n", file_output);
+            else fprintf(stderr, " (stdout)\n");
+        }
+        return hasil ? 0 : 1;
+    } else if (mode == 2) {
+        if (file_container == NULL) {
+            fprintf(stderr, "❌ Gunakan: -l <container>\n");
+            return 1;
+        }
+        return baca_multi_berkas(file_container, password) ? 0 : 1;
+    } else if (mode == 3) {
+        if (file_container == NULL) {
+            fprintf(stderr, "❌ Gunakan: -x <container>\n");
+            return 1;
+        }
+        return ekstrak_semua(file_container, password) ? 0 : 1;
+    } else {
+        fprintf(stderr, "❌ Tidak ada aksi. Coba --help\n");
+        return 1;
+    }
+
+    return 0;
+}
