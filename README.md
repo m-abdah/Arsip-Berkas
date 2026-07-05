@@ -1,7 +1,5 @@
 # Arsip-Berkas
 Membuat arsip berkas sederhana dan cepat.
-Saya membuat kode ini di Android.
-- Untuk Enkode hanya mengunakan `xor` yang di sandikan
+- Untuk informasi pengunaan bisa di lihat ketika kompilasi selesai masukan perintah ini `adharc --help`
 
-
-Kalian bisa melihat di berkas `Makefile,kompilasi.bat,kompilasi.sh` di sana ada informasi untuk kompilasi
+Kalian bisa menjalankan berkas `kompilasi.bat` di sana anda akan di kompilasi otomatis `jika` anda sudah memasang MinGw untuk Windows
